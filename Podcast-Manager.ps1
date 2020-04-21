@@ -571,6 +571,21 @@ Function Remove-Podcast {
 	Remove-Variable -Name valid,choice -Force -ErrorAction SilentlyContinue
 	Start-Sleep 3
 }
+
+Function Update-PlayerFiles {
+	<#
+	Logic for this function will be:
+	Select podcast(s) to update on player
+	for each selected podcast:
+		if player folder exists
+			Check for most recent ep on player
+			Copy all episodes more recent than that
+		else 
+			Create folder on player
+			Prompt user for how many episodes to copy
+		
+	#>
+}
 	
 
 ###############
