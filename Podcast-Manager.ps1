@@ -586,9 +586,10 @@ Function Update-PlayerFiles {
 			Prompt user for how many episodes to copy
 		
 	# Sample code from Bandcamp-Zip-Extractor
+	#>
 	$playerpath=Read-Host -Prompt "Enter full path of directory where extracted files should be copied. Press Enter to skip"
 	if (Test-path $playerpath) {
-		$folders=GCI -path $dirpath -Recurse | ? {$_.Mode -match "^d" -and $_.CreationTime -gt ((get-Date).AddDays(-1))} | Sort-Object -Property Fullname
+		$folders=GCI -path $podcastdir -Recurse | ? {$_.Mode -match "^d" -and $_.CreationTime -gt ((get-Date).AddDays(-1))} | Sort-Object -Property Fullname
 		$dirmatch=($dirpath -replace "\\","\\") -replace ":","\:"
 		foreach ($folder in $folders) {
 			$destination=$folder.FullName -replace $dirmatch,$playerpath
@@ -604,7 +605,6 @@ Function Update-PlayerFiles {
 			Remove-Variable -name destination,files -force -erroraction silentlycontinue
 		}
 	}
-	#>
 }
 	
 
