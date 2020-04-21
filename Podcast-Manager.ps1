@@ -237,6 +237,7 @@ Function Download-PendingEpisodes {
 					$link=Invoke-Expression ($podcast.Mp3Transform)
 				}
 				Start-BitsTransfer -Displayname "$($podcast.Name) Download" -Source $link -Destination $targetpath -Asynchronous
+				
 
 				Remove-Variable -Name targettitle,targetpath,link -Force -ErrorAction SilentlyContinue
 			}
@@ -584,6 +585,25 @@ Function Update-PlayerFiles {
 			Create folder on player
 			Prompt user for how many episodes to copy
 		
+	# Sample code from Bandcamp-Zip-Extractor
+	$playerpath=Read-Host -Prompt "Enter full path of directory where extracted files should be copied. Press Enter to skip"
+	if (Test-path $playerpath) {
+		$folders=GCI -path $dirpath -Recurse | ? {$_.Mode -match "^d" -and $_.CreationTime -gt ((get-Date).AddDays(-1))} | Sort-Object -Property Fullname
+		$dirmatch=($dirpath -replace "\\","\\") -replace ":","\:"
+		foreach ($folder in $folders) {
+			$destination=$folder.FullName -replace $dirmatch,$playerpath
+			if (!(Test-Path $destination)) {
+				New-Item -Type Directory -Path $destination
+			}
+			$files=Gci -Path $folder.Fullname -filter "*.mp3"
+			if ($files) {
+				foreach ($file in Gci -Path $folder.Fullname) {
+					Copy-Item -Path $file.Fullname -Destination $destination
+				}
+			}
+			Remove-Variable -name destination,files -force -erroraction silentlycontinue
+		}
+	}
 	#>
 }
 	
