@@ -22,6 +22,13 @@ $global:pendingepisodes=@()
 $podcastdir="<local podcast directory path>"
 $playerpath="<player podcast directory path>"
 
+# ArrayList for invalid characters
+if ($PSScriptRoot) {
+	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $($PSScriptRoot+"\invalidchars.csv")
+} else {
+	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $("<full path to invalidchars.csv>")
+}
+
 
 ###############
 # Functions
@@ -196,8 +203,7 @@ Function Show-LatestEpisodes {
 }
 
 Function Download-PendingEpisodes {
-	$invalidchars=@("/",":","*","?","<",">","|")
-	# Only start the download pr
+	# Only start the download if the pending episodes array has been populated
 	if ($global:pendingepisodes) {
 		foreach ($podcast in $global:config) {
 			foreach ($episode in ($global:pendingepisodes | ? {$_.Name -eq $podcast.Name}).Episodes) {
@@ -208,11 +214,17 @@ Function Download-PendingEpisodes {
 				} else {
 					$targetfile=$title
 				}
-				# Check filename for invalid characters.
+				
 				foreach ($char in $invalidchars) {
-					if ($targetfile -match $("\$char")) {
-						$targetfile=$targetfile -replace $("\$char"),"_"
+					if ($char.Replace -eq "") {
+						$replace="_"
+					} else {
+						$replace=$char.Replace
 					}
+					if ($targetfile -match $char.Escaped) {
+						$targetfile=$targetfile -replace $($char.Escaped),$replace
+					}
+					Remove-Variable -name replace -Force -ErrorAction SilentlyContinue
 				}
 				# Special case for replacing quotes:
 				if ($targetfile -match '"') {
@@ -252,7 +264,7 @@ Function Download-PendingEpisodes {
 
 			# Optional progress reporting
 			$transfers=Get-BitsTransfer
-			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Transferring"}) -or ($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Connecting"})) {
+			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -match "^Transferring$|^Connecting$"})) {
 				# Progress stuff goes here
 				$percentages=@()
 				foreach ($transfer in $transfers) {
@@ -263,7 +275,9 @@ Function Download-PendingEpisodes {
 			}
 		}
 		# Complete transfer process
-		Complete-BitsTransfer -BitsJob $transfers
+		foreach ($transfer in $transfers) {
+			Complete-BitsTransfer -BitsJob $transfer
+		}
 	}
 }
 
@@ -430,7 +444,7 @@ Function Add-Podcast {
 	}
 	Remove-variable -name validmp3,confirm -force -erroraction silentlycontinue
 	
-	# 8) Check if F:\Podcasts\<name> exists, then check if it should be created or another path used. Create directory once confirmed.
+	# 8) Check if target directory exists, then check if it should be created or another path used. Create directory once confirmed.
 	cls
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	[string]$fullpath=$podcastdir+"\"+$($name)
@@ -448,7 +462,7 @@ Function Add-Podcast {
 			} catch {
 				Write-Host "Directory $($fullpath) couldn't be created, error was:`n$($_.Exception.Message)." -foregroundcolor red
 				$newname=Read-Host("Please enter another directory name to use for this podcast")
-				[string]$fullpath=$podcastdir+$newname
+				[string]$fullpath=$podcastdir+"\"+$newname
 			}
 		}
 	}
@@ -503,11 +517,7 @@ Function Add-Podcast {
 		Write-Host "Retrieving the most recent episode..."
 		$podcast=$global:config[$($global:config.count -1)]
 		[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
-		if ($(Invoke-Expression $podcast.EpNumberInTitle)) {
-			$eps=($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and ((($_.Title -split " ")[0] -as [int]) -is [int])})[0]
-		} else {
-			$eps=@($feed.rss.channel.item | ? {$_.Title -match $podcast.TitleFilter})[0]
-		}
+		$eps=($feed.rss.channel.item | ? {$_.Title -match $podcast.TitleFilter})[0]
 		$var = New-Object PSObject
 		Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $podcast.Name
 		Add-Member -InputObject $var -MemberType NoteProperty -Name Episodes -Value $eps
