@@ -11,12 +11,23 @@ param(
 Ipmo BitsTransfer
 
 # Config file import
-[System.Collections.ArrayList]$global:config=Import-CSV -Path $($PSScriptRoot+"\Config.txt") -Delimiter ";"
+if ($PSScriptRoot) {
+	[System.Collections.ArrayList]$global:config=Import-CSV -Path $($PSScriptRoot+"\Config.txt") -Delimiter ";"
+} else {
+	[System.Collections.ArrayList]$global:config=Import-CSV -Path $("<full path to config.txt>") -Delimiter ";"
+}
 $global:pendingepisodes=@()
 
 # Local and remote directory configurations
-$podcastdir="<top-level directory for podcast storage>"
-$playerdir=$null
+$podcastdir="<local podcast directory path>"
+$playerpath="<player podcast directory path>"
+
+# ArrayList for invalid characters
+if ($PSScriptRoot) {
+	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $($PSScriptRoot+"\invalidchars.csv")
+} else {
+	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $("<full path to invalidchars.csv>")
+}
 
 
 ###############
@@ -36,7 +47,8 @@ Podcast Manager
 5.	View managed podcasts
 6.	Add new managed podcast
 7.	Remove managed podcast
-8.	Quit
+8.	Update player files
+9.	Quit
 
 "@
 	# Wrap menu in a while-loop
@@ -44,7 +56,7 @@ Podcast Manager
 	do {
 		Clear-Host
 		Write-Host $menu
-		$choice = Read-Host("Please choose from 1-8")
+		$choice = Read-Host("Please choose from 1-9")
 
 		switch ($choice) {
 			"1" {
@@ -93,6 +105,9 @@ Podcast Manager
 				Remove-Podcast;
 			}
 			"8" {
+				Update-PlayerFiles;
+			}
+			"9" {
 				Write-Host "Quitting..."
 				$quit = $true
 			}
@@ -188,8 +203,7 @@ Function Show-LatestEpisodes {
 }
 
 Function Download-PendingEpisodes {
-	$invalidchars=@("/",":","*","?","<",">","|")
-	# Only start the download pr
+	# Only start the download if the pending episodes array has been populated
 	if ($global:pendingepisodes) {
 		foreach ($podcast in $global:config) {
 			foreach ($episode in ($global:pendingepisodes | ? {$_.Name -eq $podcast.Name}).Episodes) {
@@ -200,11 +214,17 @@ Function Download-PendingEpisodes {
 				} else {
 					$targetfile=$title
 				}
-				# Check filename for invalid characters.
+				
 				foreach ($char in $invalidchars) {
-					if ($targetfile -match $("\$char")) {
-						$targetfile=$targetfile -replace $("\$char"),"_"
+					if ($char.Replace -eq "") {
+						$replace="_"
+					} else {
+						$replace=$char.Replace
 					}
+					if ($targetfile -match $char.Escaped) {
+						$targetfile=$targetfile -replace $($char.Escaped),$replace
+					}
+					Remove-Variable -name replace -Force -ErrorAction SilentlyContinue
 				}
 				# Special case for replacing quotes:
 				if ($targetfile -match '"') {
@@ -237,13 +257,14 @@ Function Download-PendingEpisodes {
 					$link=Invoke-Expression ($podcast.Mp3Transform)
 				}
 				Start-BitsTransfer -Displayname "$($podcast.Name) Download" -Source $link -Destination $targetpath -Asynchronous
+				
 
 				Remove-Variable -Name targettitle,targetpath,link -Force -ErrorAction SilentlyContinue
 			}
 
 			# Optional progress reporting
 			$transfers=Get-BitsTransfer
-			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Transferring"}) -or ($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Connecting"})) {
+			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -match "^Transferring$|^Connecting$"})) {
 				# Progress stuff goes here
 				$percentages=@()
 				foreach ($transfer in $transfers) {
@@ -254,7 +275,9 @@ Function Download-PendingEpisodes {
 			}
 		}
 		# Complete transfer process
-		Complete-BitsTransfer -BitsJob $transfers
+		foreach ($transfer in $transfers) {
+			Complete-BitsTransfer -BitsJob $transfer
+		}
 	}
 }
 
@@ -315,7 +338,7 @@ Function Add-Podcast {
 	}
 	Remove-Variable -name epchoice,validepnumber -Force -ErrorAction Silentlycontinue
 	
-	# Check if f title filtering is required, prompt for regex to use and verify before proceeding. - DONE
+	# Check if title filtering is required, prompt for regex to use and verify before proceeding. - DONE
 	cls
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	foreach ($ep in $eps) {
@@ -421,10 +444,10 @@ Function Add-Podcast {
 	}
 	Remove-variable -name validmp3,confirm -force -erroraction silentlycontinue
 	
-	# 8) Check if F:\Podcasts\<name> exists, then check if it should be created or another path used. Create directory once confirmed.
+	# 8) Check if target directory exists, then check if it should be created or another path used. Create directory once confirmed.
 	cls
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
-	[string]$fullpath=$podcastdir+$($name)
+	[string]$fullpath=$podcastdir+"\"+$($name)
 	[boolean]$validpath=$false
 	While (!$validpath) {
 		If (Test-Path $fullpath -ErrorAction SilentlyContinue) {
@@ -439,7 +462,7 @@ Function Add-Podcast {
 			} catch {
 				Write-Host "Directory $($fullpath) couldn't be created, error was:`n$($_.Exception.Message)." -foregroundcolor red
 				$newname=Read-Host("Please enter another directory name to use for this podcast")
-				[string]$fullpath=$podcastdir+$newname
+				[string]$fullpath=$podcastdir+"\"+$newname
 			}
 		}
 	}
@@ -494,11 +517,7 @@ Function Add-Podcast {
 		Write-Host "Retrieving the most recent episode..."
 		$podcast=$global:config[$($global:config.count -1)]
 		[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
-		if ($(Invoke-Expression $podcast.EpNumberInTitle)) {
-			$eps=($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and ((($_.Title -split " ")[0] -as [int]) -is [int])})[0]
-		} else {
-			$eps=@($feed.rss.channel.item | ? {$_.Title -match $podcast.TitleFilter})[0]
-		}
+		$eps=($feed.rss.channel.item | ? {$_.Title -match $podcast.TitleFilter})[0]
 		$var = New-Object PSObject
 		Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $podcast.Name
 		Add-Member -InputObject $var -MemberType NoteProperty -Name Episodes -Value $eps
@@ -570,6 +589,98 @@ Function Remove-Podcast {
 	
 	Remove-Variable -Name valid,choice -Force -ErrorAction SilentlyContinue
 	Start-Sleep 3
+}
+
+Function Update-PlayerFiles {
+	param(
+		[Parameter(Mandatory=$false)][string]$mode="Current"
+	)
+	switch ($mode) {
+		"Current" {
+			<# 	Current:
+			Check player directory
+			for each directory found, check if a podcast in $podcast matches the name
+			If found:
+				Check for latest episode on player, either by episode or date.
+				Identify newer episodes in podcast directory
+				Copy sequentially to player.
+			#>
+			if (!$playerpath) {
+					$playerpath=Read-Host -Prompt "Enter full path of player podcast directory"
+			}
+			if (Test-path $playerpath) {
+				Write-Host "Updating player with latest episodes..."
+				$podmatch=($podcastdir -replace "\\","\\") -replace ":","\:"
+				foreach ($podcast in $global:config) {
+				
+					$playerdir=$podcast.directory -replace $podmatch,$playerpath
+					# Check if the podcast directory exists on the player
+					if (Test-Path $playerdir) {
+						Write-host "$($podcast.Name)"
+						# Check for latest episode depending on whether podcast uses episode numbers or dates.
+						if (Invoke-Expression ($podcast.EpNumberInTitle)) {
+							[int]$mostrecent=((GCI -Path $playerdir -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name -split " - ")[0]
+							$files=gci $podcast.Directory -Filter "*.mp3" | ? {[int](($_.Name -split " - ")[0]) -gt $mostrecent}
+							if ($files.count -gt 0) {
+								Write-host "New episodes of $($podcast.Name) found, starting copy process..."
+								foreach ($file in $files) {
+									Copy-Item -Path $file.Fullname -Destination $playerdir
+								}
+							} else {
+								Write-host "No new episodes available."
+							}
+							remove-variable -name mostrecent,files -Force -Erroraction SilentlyContinue	
+						} else {
+							[datetime]$mostrecent=((GCI -Path $playerdir -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name).SubString(0,10)
+							$files=gci $podcast.Directory -Filter "*.mp3" | ? {[datetime](($_.Name).SubString(0,10)) -gt $mostrecent} 
+							if ($files.count -gt 0) {
+								Write-host "New episodes of $($podcast.Name) found, starting copy process..."
+								foreach ($file in $files) {
+									Copy-Item -Path $file.Fullname -Destination $playerdir
+								}
+							} else {
+								Write-host "No new episodes available."
+							}
+							remove-variable -name mostrecent,files -Force -Erroraction SilentlyContinue	
+						}
+					}
+					Remove-Variable -name playerdir -force -erroraction SilentlyContinue
+				}
+				remove-variable -name podmatch -force -ErrorAction SilentlyContinue
+			} else {
+				Write-Host "Cannot find podcast directory with specified path $($playerpath)!" -foregroundcolor red
+			}
+		}
+		"Single" {
+			<#	Single:
+			Select podcast to update on player
+			if player folder exists
+				Check for most recent ep on player
+				Copy all episodes more recent than that
+			else 
+				Create folder on player
+				Prompt user for how many episodes to copy
+				Copy selected episodes sequentially
+			#>
+			Write-Host "Not implemented yet!" -foregroundcolor yellow
+		}
+		"All" {
+			<#	All:
+			Foreach podcast:
+				if player folder exists
+					Check for most recent ep on player
+					Copy all episodes more recent than that
+				else 
+					Create folder on player
+					Prompt user for how many episodes to copy
+					Copy selected episodes sequentially
+			#>
+			Write-Host "Not implemented yet!" -foregroundcolor yellow
+		}
+		default {
+			Write-Host "Invalid player update mode specified!" -foregroundcolor red
+		}
+	}
 }
 	
 
