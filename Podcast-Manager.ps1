@@ -1,7 +1,5 @@
 #Podcast-Manager
-param(
-	[Parameter(Mandatory=$false)][boolean]$menu=$false
-)
+
 ###############
 # Variables etc
 ###############
@@ -10,25 +8,26 @@ param(
 
 Ipmo BitsTransfer
 
-# Config file import
-if ($PSScriptRoot) {
-	[System.Collections.ArrayList]$global:config=Import-CSV -Path $($PSScriptRoot+"\Config.txt") -Delimiter ";"
+# Configuration import
+[xml]$settings=Get-Content .\Config.xml
+
+if ($PSScriptRoot -ne "") {
+	[System.Collections.ArrayList]$global:podcasts=Import-CSV -Path $($PSScriptRoot+"$($settings.Settings.PodcastList)") -Delimiter $settings.Settings.PodcastDelimiter;
+	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $($PSScriptRoot+"$($settings.Settings.InvalidChars)")
 } else {
-	[System.Collections.ArrayList]$global:config=Import-CSV -Path $("<full path to config.txt>") -Delimiter ";"
+	[System.Collections.ArrayList]$global:podcasts=Import-CSV -Path $settings.Settings.PodcastList -Delimiter $settings.Settings.PodcastDelimiter;
+	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $settings.Settings.InvalidChars
 }
-$global:pendingepisodes=@()
+[System.collections.arraylist]$global:pendingepisodes=@()
 
 # Local and remote directory configurations
-$podcastdir="<local podcast directory path>"
-$playerpath="<player podcast directory path>"
+$podcastdir=$settings.Settings.PodcastDirectory
+$playerpath=$settings.Settings.PlayerDirectory
 
-# ArrayList for invalid characters
-if ($PSScriptRoot) {
-	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $($PSScriptRoot+"\invalidchars.csv")
-} else {
-	[System.Collections.ArrayList]$invalidchars=Import-CSV -Path $("<full path to invalidchars.csv>")
-}
-
+# Interactive mode
+if ($settings.Settings.Interactive -eq "Enabled") {
+	[boolean]$interactive=$true
+} 
 
 ###############
 # Functions
@@ -54,36 +53,36 @@ Podcast Manager
 	# Wrap menu in a while-loop
 	$quit=$false
 	do {
-		Clear-Host
+		#Clear-Host
 		Write-Host $menu
 		$choice = Read-Host("Please choose from 1-9")
 
 		switch ($choice) {
 			"1" {
-				for ($i=0;$i -lt $global:config.count;$i++) {
+				for ($i=0;$i -lt $global:podcasts.count;$i++) {
 					Get-PendingEpisodes -podchoice $i
 				}
 				Start-sleep 5
 			}
 			"2" {
 				# Display names of podcast, prompt for numerical selection, then invoke Get-PendingEpisodes.
-				cls
+				Clear-Host
 				[boolean]$valid=$false
 				while (!$valid) {
 					Write-Host "The following podcasts are managed:`n"
-					for ($i=0;$i -lt $global:config.count;$i++) {
-						Write-Host "$($i+1): $($global:config[$i].Name)"
+					for ($i=0;$i -lt $global:podcasts.count;$i++) {
+						Write-Host "$($i+1): $($global:podcasts[$i].Name)"
 					}
 					Write-Host ""
 					[int]$choice=Read-Host("Please select the desired podcast")
 					$choice--
-					if ($global:config[$choice]) {
-						$valid=$true;
+					if ($global:podcasts[$choice]) {
+						$valid=$true; 
 						Get-PendingEpisodes -podchoice $choice
 					} else {
 						Write-Host "Invalid selection entered, please try again!" -foregroundcolor red
 						Start-sleep 3
-						cls
+						Clear-Host
 					}
 				}
 				Start-Sleep 5
@@ -123,25 +122,39 @@ Function Get-PendingEpisodes {
 	param(
 		[Parameter(Mandatory=$true)][string]$podchoice
 	)
-	$podcast=$global:config[$podchoice]
+	$podcast=$global:podcasts[$podchoice]
 	Write-Host "Podcast:`t$($podcast.Name)"
 	# Feed retrieval and new episode identification goes here.
 	[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
-	if ($(Invoke-Expression $podcast.EpNumberInTitle)) {
-		# Find most recent downloaded episode using episode number
-		if ((Gci -Path $Podcast.Directory -filter "*.mp3" ).count -gt 0) {
-			[int]$mostrecent=((GCI -Path $podcast.directory -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name -split " - ")[0]
+	if ($(Invoke-Expression $podcast.EpNumber)) {
+		# If cutoff is populated, use that
+		if ($podcast.cutoff) {
+			[int]$mostrecent=$podcast.cutoff
+		} elseif ((Gci -Path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3").count -gt 0) {
+			[int]$mostrecent=((GCI -Path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name -split " - |:")[0]
 		} else {
 			$mostrecent=$null
 		}
-		# Find all episodes matching the title filter which have a greater episode number than the most recent episode.
-		$eps=@($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and (((($_.Title -split " ")[0] -as [int]) -is [int]) -and ([int16]($_.Title -split " ")[0] -gt $mostrecent))} | Sort-Object -Property Title)
+		# Check available episodes that match the episode filter until one exceeds the cutoff.
+		
+		# OLD CODE $eps=@($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and (((($_.Title -split " |:")[0] -as [int]) -is [int]) -and ([int16]($_.Title -split " |:")[0] -gt $mostrecent))} | Sort-Object -Property Title)
+		[System.collections.array]$eps=@()
+		for ($i=0; $i -lt $feed.rss.channel.item.count; $i++) {
+			$episode=$feed.rss.channel.item[$i] | ?{Invoke-Expression $podcast.EpFilter} |Select enclosure,@{N="EpisodeNumber";E={[int](Invoke-Expression $podcast.EpNumberTransform)}} | ? {$_.EpisodeNumber -gt $podcast.cutoff}
+			if ($episode) {
+				$eps.Add($episode) | out-Null
+			} else {
+				break;
+			}
+		}
+		
 		if ($eps) {
-			$var = New-Object PSObject
-			Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $podcast.Name
-			Add-Member -InputObject $var -MemberType NoteProperty -Name Episodes -Value $eps
+			$var = New-Object -Type PSObject @{
+				Name = $podcast.Name
+				Episodes = $eps
+			}
 			Write-Host "Number of available new episodes:`t$($eps.Count)`n"
-			$global:pendingepisodes+=$var
+			$global:pendingepisodes.Add($var) | Out-Null
 			Remove-Variable -name eps,var
 		} else {
 			Write-Host "Number of available new episodes:`t0`n"
@@ -149,8 +162,8 @@ Function Get-PendingEpisodes {
 		Remove-Variable -name mostrecent -Force -erroraction silentlycontinue
 	} else {
 		# Find most recent downloaded episode using episode datestring
-		if ((Gci -Path $Podcast.Directory -filter "*.mp3" ).count -gt 0) {
-			[datetime]$mostrecent=((GCI -Path $podcast.directory -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name).SubString(0,10)
+		if ((Gci -path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" ).count -gt 0) {
+			[datetime]$mostrecent=((GCI -path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name).SubString(0,10)
 			$mostrecent=$mostrecent.AddMinutes(1439)
 		} else {
 			$mostrecent=$null
@@ -159,20 +172,15 @@ Function Get-PendingEpisodes {
 		$eps=@($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and ([datetime]$($_.Pubdate -replace " EST","") -gt $mostrecent)}| Sort-Object @{Expression={[datetime]$($_.Pubdate -replace " EST","")};Ascending=$true})
 
 		if ($eps) {
+			$var = New-Object -Type PSObject @{
+				Name = $podcast.Name
+				Episodes = $eps
+			}
+			$global:pendingepisodes.Add($var) | Out-Null
 			if ($eps.GetType().BaseType.Name -eq "System.Xml.XmlElement") {
-				$var = New-Object PSObject
-				Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $podcast.Name
-				Add-Member -InputObject $var -MemberType NoteProperty -Name Episodes -Value $eps
 				Write-Host "Number of available new episodes:`t1`n"
-				$global:pendingepisodes+=$var
-				Remove-Variable -name eps,var
 			} else {
-				$var = New-Object PSObject
-				Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $podcast.Name
-				Add-Member -InputObject $var -MemberType NoteProperty -Name Episodes -Value $eps
 				Write-Host "Number of available new episodes:`t$($eps.Count)`n"
-				$global:pendingepisodes+=$var
-				Remove-Variable -name eps,var
 			}
 		} else {
 			Write-Host "Number of available new episodes:`t0`n"
@@ -182,10 +190,10 @@ Function Get-PendingEpisodes {
 }
 
 Function Show-LatestEpisodes {
-	cls
+	Clear-Host
 	Write-Host "Latest episodes released for managed podcasts`n" -foregroundcolor white
-	for ($i=0;$i -lt $global:config.count;$i++) {
-		$podcast=$global:config[$i];
+	for ($i=0;$i -lt $global:podcasts.count;$i++) {
+		$podcast=$global:podcasts[$i];
 		Write-Host "Podcast:`t$($podcast.Name)"
 		[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
 		$ep=($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and ([datetime]$($_.Pubdate -replace " EST","") -gt $mostrecent)}| Sort-Object @{Expression={[datetime]$($_.Pubdate -replace " EST","")};Ascending=$false})[0]
@@ -203,9 +211,9 @@ Function Show-LatestEpisodes {
 }
 
 Function Download-PendingEpisodes {
-	# Only start the download if the pending episodes array has been populated
+	# Only start the download pr
 	if ($global:pendingepisodes) {
-		foreach ($podcast in $global:config) {
+		foreach ($podcast in $global:podcasts) {
 			foreach ($episode in ($global:pendingepisodes | ? {$_.Name -eq $podcast.Name}).Episodes) {
 				# Assemble filename from title, adding pubdate where necessary
 				$title=$episode.Title
@@ -214,7 +222,7 @@ Function Download-PendingEpisodes {
 				} else {
 					$targetfile=$title
 				}
-				
+				# Check filename for invalid characters.
 				foreach ($char in $invalidchars) {
 					if ($char.Replace -eq "") {
 						$replace="_"
@@ -230,7 +238,7 @@ Function Download-PendingEpisodes {
 				if ($targetfile -match '"') {
 					$targetfile=$targetfile -replace '"',"'"
 				}
-
+				
 				if (!(Invoke-Expression $podcast.EpNumberInTitle)) {
 					[datetime]$pubdate=$episode.Pubdate -replace " EST",""
 					[string]$year=$pubdate.Year.ToString()
@@ -257,14 +265,13 @@ Function Download-PendingEpisodes {
 					$link=Invoke-Expression ($podcast.Mp3Transform)
 				}
 				Start-BitsTransfer -Displayname "$($podcast.Name) Download" -Source $link -Destination $targetpath -Asynchronous
-				
 
 				Remove-Variable -Name targettitle,targetpath,link -Force -ErrorAction SilentlyContinue
 			}
 
 			# Optional progress reporting
 			$transfers=Get-BitsTransfer
-			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -match "^Transferring$|^Connecting$"})) {
+			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Transferring"}) -or ($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Connecting"})) {
 				# Progress stuff goes here
 				$percentages=@()
 				foreach ($transfer in $transfers) {
@@ -275,16 +282,14 @@ Function Download-PendingEpisodes {
 			}
 		}
 		# Complete transfer process
-		foreach ($transfer in $transfers) {
-			Complete-BitsTransfer -BitsJob $transfer
-		}
+		Complete-BitsTransfer -BitsJob $transfers
 	}
 }
 
 Function Add-Podcast {
 	[boolean]$valid=$false
 	while (!$valid) {
-		cls
+		Clear-Host
 		Write-Host "Add Managed Podcast`n" -foregroundcolor white
 		$newfeed=Read-Host("Please enter the RSS feed address for the podcast")
 		try {
@@ -302,7 +307,7 @@ Function Add-Podcast {
 	Remove-variable -name valid -force -erroraction silentlycontinue
 	
 	# Check if name on feed should be used, prompt for name if not. - DONE
-	cls
+	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	Write-Host "RSS feed retrieved:`nName:`t$($feed.rss.channel.title)"
 	$name=Read-Host("If you wish to change the name used to manage this podcast, please enter it now. To use the displayed podcast name, press Enter");
@@ -313,7 +318,7 @@ Function Add-Podcast {
 	# Display 10 most recent episode titles and check if Episode number at start of title. - DONE
 	[boolean]$validepnumber=$false
 	while (!$validepnumber) {
-		cls
+		Clear-Host
 		Write-Host "Add Managed Podcast`n" -foregroundcolor white
 		foreach ($ep in $eps) {
 			Write-Host "Episode title:`t$($ep.title)`n"
@@ -339,7 +344,7 @@ Function Add-Podcast {
 	Remove-Variable -name epchoice,validepnumber -Force -ErrorAction Silentlycontinue
 	
 	# Check if title filtering is required, prompt for regex to use and verify before proceeding. - DONE
-	cls
+	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	foreach ($ep in $eps) {
 		Write-Host "Episode title:`t$($ep.title)`n"
@@ -368,7 +373,7 @@ Function Add-Podcast {
 	Remove-variable -name validfilter,confirm -force -erroraction silentlycontinue
 	
 	# 6) Check if title transform is required, prompt for regex to use and require confirmation before proceeding - DONE
-	cls
+	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	foreach ($ep in $($eps | ? {$_.Title -match $filter})) {
 		Write-Host "Episode title:`t$($ep.title)`n"
@@ -400,14 +405,14 @@ Function Add-Podcast {
 	Remove-variable -name validtransform,confirm -force -erroraction silentlycontinue
 	
 	# 7) Check if Mp3transform is required, prompt for regex to use and require confirmation before proceeding. - DONE
-	cls
+	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	foreach ($ep in $($eps | ? {$_.Title -match $filter})) {
 		Write-Host "Link:`t$($ep.enclosure.url)`n"
 	}
 	[string]$mp3transform=Read-Host("Based on the displayed download links, is any modification of URLs required? Y/N")
 	if ($mp3transform -eq "Y") {
-		cls
+		Clear-Host
 		[boolean]$validmp3=$false
 		while (!$validmp3) {
 			$mp3=Read-Host("Please enter a regular expression to use for modifying download links, using `$link as the variable")
@@ -445,7 +450,7 @@ Function Add-Podcast {
 	Remove-variable -name validmp3,confirm -force -erroraction silentlycontinue
 	
 	# 8) Check if target directory exists, then check if it should be created or another path used. Create directory once confirmed.
-	cls
+	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
 	[string]$fullpath=$podcastdir+"\"+$($name)
 	[boolean]$validpath=$false
@@ -468,73 +473,72 @@ Function Add-Podcast {
 	}
 	
 	# 9) Create object, add to config, write new contents of config file. DONE
-	$var = New-Object PSObject
-
-	Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $name
-	Add-Member -InputObject $var -MemberType NoteProperty -Name RSSFeed -Value $newfeed
-	Add-Member -InputObject $var -MemberType NoteProperty -Name EpNumberInTitle -Value $epnumber
-	Add-Member -InputObject $var -MemberType NoteProperty -Name TitleFilter -Value $filter
-	if ($titletransform -eq "Y") {
-		Add-Member -InputObject $var -MemberType NoteProperty -Name TitleTransform -Value $transform
-	} else {
-		Add-Member -InputObject $var -MemberType NoteProperty -Name TitleTransform -Value $null
+	if ($titletransform -ne "Y") {
+		$transform = $null
 	}	
-	Add-Member -InputObject $var -MemberType NoteProperty -Name Mp3Link -Value "enclosure.url"
-	if ($mp3transform -eq "Y") {
-		Add-Member -InputObject $var -MemberType NoteProperty -Name Mp3Transform -Value $mp3
-	} else {
-		Add-Member -InputObject $var -MemberType NoteProperty -Name Mp3Transform -Value $null	
+	if ($mp3transform -ne "Y") {
+		$mp3 = $null	
 	}
 	Add-Member -InputObject $var -MemberType NoteProperty -Name Directory -Value $fullpath
-	
-	# Add new object to $global:config array
-	$global:config+=$var
+	$var = New-Object -Type PSObject @{
+		Name = $name
+		RSSFeed = $newfeed
+		EpNumberInTitle = $epnumber
+		TitleFilter = $filter
+		TitleTransform = $transform	
+		Mp3Link = "enclosure.url"
+		Mp3Transform = $mp3
+		Directory = $fullpath
+	}
+	# Add new object to $global:podcasts array
+	$global:podcasts.Add($var) | Out-Null
 	
 	# Remove unnecessary parameters
 	Remove-Variable -Name var,newfeed,titletransform,transform,mp3transform,fullpath -ErrorAction SilentlyContinue
 	
-	# Check if existing old config file exists, if so delete, then back up original config.txt file
-	$oldpath=$PsScriptRoot+"\Config.old"
-	If (Test-Path $oldpath) {
-		Remove-Item -Path $oldpath -Force -Confirm:$false
-		remove-variable -name oldpath -force -erroraction silentlycontinue
+	# Rename original podcast list file, then save new list under original filename
+	if ($PSScriptRoot -ne "") {
+		$podlist = $($PSScriptRoot+"$($settings.Settings.PodcastList)");
+		$oldlist = $($PSScriptRoot+"$($settings.Settings.PodcastList)").Replace(".csv","")+"_"+(Get-Date -format 'yyyyMMdd_HHmm').ToString()+".old"
+	} else {
+		$podlist = $settings.Settings.PodcastList;
+		$oldlist = ($settings.Settings.PodcastList).Replace(".csv","")+"_"+(Get-Date -format 'yyyyMMdd_HHmm').ToString()+".old"
 	}
-	Rename-Item -Path $($PSScriptRoot+"\Config.txt") -NewName "Config.old" -Force -confirm:$false
 	
-	# Output updated $global:config array to text file
-	$global:config | Export-CSV -Path $($PSScriptRoot+"\Config.txt") -Encoding UTF8 -Delimiter ";" -NoTypeInformation
+	Rename-Item -Path $podlist -NewName $oldlist -Force -confirm:$false
+	$global:podcasts | Export-CSV -Path $podlist -Encoding UTF8 -Delimiter $settings.Settings.PodcastDelimiter -NoTypeInformation
+	[System.Collections.ArrayList]$global:podcasts=Import-CSV -Path $podlist -Delimiter $settings.Settings.PodcastDelimiter
+	Remove-Variable -name podlist,oldlist -Force ErrorAction SilentlyContinue
 	
-	# Reload config file
-	[System.Collections.ArrayList]$global:config=Import-CSV -Path $($PSScriptRoot+"\Config.txt") -Delimiter ";"
-
 	# 10) Check for episodes to download: all available or only most recent. Default is most recent.
 	[string]$epchoice=Read-Host("To download only the latest episode, press Enter. To download all episodes, type 'ALL'")
 	if ($epchoice -eq "ALL") {
 		Write-Host "Retrieving all available episodes..."
-		Get-PendingEpisodes -podchoice $($global:config.count -1)
+		Get-PendingEpisodes -podchoice $($global:podcasts.count -1)
 		Download-PendingEpisodes
 	} else {
 		Write-Host "Retrieving the most recent episode..."
-		$podcast=$global:config[$($global:config.count -1)]
+		$podcast=$global:podcasts[$($global:podcasts.count -1)]
 		[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
 		$eps=($feed.rss.channel.item | ? {$_.Title -match $podcast.TitleFilter})[0]
-		$var = New-Object PSObject
-		Add-Member -InputObject $var -MemberType NoteProperty -Name Name -Value $podcast.Name
-		Add-Member -InputObject $var -MemberType NoteProperty -Name Episodes -Value $eps
+		$var = New-Object PSObject -@{
+			Name = $podcast.Name
+			Episodes = $eps
+		}
 		Write-Host "Number of available new episodes:`t1`n"
-		$global:pendingepisodes+=$var
+		$global:pendingepisodes.Add($var) | Out-Null
 		Remove-Variable -name eps,var
 		Download-PendingEpisodes
 	}
 }
 
 Function View-Podcasts {
-	cls
+	Clear-Host
 	Write-Host "The following podcasts are currently managed:`n"
-	for ($i=0;$i -lt $global:config.count;$i++) {
-		$podcast=$global:config[$i];
+	for ($i=0;$i -lt $global:podcasts.count;$i++) {
+		$podcast=$global:podcasts[$i];
 		Write-Host "Podcast:`t$($podcast.Name)"
-		if (Test-Path $podcast.Directory) {
+		if (Test-path "$($Podcast.Directory)") {
 			Write-Host "Podcast directory exists." -foregroundcolor green
 		} else {
 			Write-Host "Podcast directory does not exist!" -foregroundcolor red
@@ -555,39 +559,37 @@ Function Remove-Podcast {
 	# Display names of podcast, prompt for numerical selection, remove from config array and update config.txt file.
 	[boolean]$valid=$false
 	while (!$valid) {
-		cls
+		Clear-Host
 		Write-Host "Add new podcast to managed podcast list`n"
 		Write-Host "The following podcasts are managed:`n"
-		for ($i=0;$i -lt $global:config.count;$i++) {
-			Write-Host "$($i+1): $($global:config[$i].Name)"
+		for ($i=0;$i -lt $global:podcasts.count;$i++) {
+			Write-Host "$($i+1): $($global:podcasts[$i].Name)"
 		}
 		Write-Host ""
 		[int]$choice=Read-Host("Please select the podcast to remove")
 		$choice--
-		if ($global:config[$choice]) {
-			$global:config.RemoveAt($choice)
+		if ($global:podcasts[$choice]) {
+			$global:podcasts.RemoveAt($choice)
 			$valid=$true;
 		} else {
 			Write-Host "Invalid selection entered, please try again!" -foregroundcolor red
 			Start-sleep 3
-			cls
+			Clear-Host
 		}
 	}
-	# Back up original config.txt file
-	
-	If (Test-Path $($PsScriptRoot+"\Config.old")) {
-		Remove-Item -Path $($PsScriptRoot+"\Config.old") -Force -Confirm:$false
+	# Rename original podcast list file, then save new list under original filename
+	if ($PSScriptRoot -ne "") {
+		$podlist = $($PSScriptRoot+"$($settings.Settings.PodcastList)");
+		$oldlist = $($PSScriptRoot+"$($settings.Settings.PodcastList)").Replace(".csv","")+"_"+(Get-Date -format 'yyyyMMdd_HHmm').ToString()+".old"
+	} else {
+		$podlist = $settings.Settings.PodcastList;
+		$oldlist = ($settings.Settings.PodcastList).Replace(".csv","")+"_"+(Get-Date -format 'yyyyMMdd_HHmm').ToString()+".old"
 	}
-	Rename-Item -Path $($PSScriptRoot+"\Config.txt") -NewName "Config.old" -Force -confirm:$false
 	
-	# Output updated $global:config array to text file
-	$global:config | Export-CSV -Path $($PSScriptRoot+"\Config.txt") -Encoding UTF8 -Delimiter ";" -NoTypeInformation
-	Write-Host "Managed podcast list has been updated. The previous configuration has been saved at $($PSScriptRoot+`"\Config.old`")."
-	
-	# Reload original config file
-	[System.Collections.ArrayList]$global:config=Import-CSV -Path $($PSScriptRoot+"\Config.txt") -Delimiter ";"
-	
-	Remove-Variable -Name valid,choice -Force -ErrorAction SilentlyContinue
+	Rename-Item -Path $podlist -NewName $oldlist -Force -confirm:$false
+	$global:podcasts | Export-CSV -Path $podlist -Encoding UTF8 -Delimiter $settings.Settings.PodcastDelimiter -NoTypeInformation
+	[System.Collections.ArrayList]$global:podcasts=Import-CSV -Path $podlist -Delimiter $settings.Settings.PodcastDelimiter
+	Remove-Variable -name valid,choice,podlist,oldlist -Force ErrorAction SilentlyContinue
 	Start-Sleep 3
 }
 
@@ -611,7 +613,7 @@ Function Update-PlayerFiles {
 			if (Test-path $playerpath) {
 				Write-Host "Updating player with latest episodes..."
 				$podmatch=($podcastdir -replace "\\","\\") -replace ":","\:"
-				foreach ($podcast in $global:config) {
+				foreach ($podcast in $global:podcasts) {
 				
 					$playerdir=$podcast.directory -replace $podmatch,$playerpath
 					# Check if the podcast directory exists on the player
@@ -681,6 +683,7 @@ Function Update-PlayerFiles {
 			Write-Host "Invalid player update mode specified!" -foregroundcolor red
 		}
 	}
+	Start-Sleep 3
 }
 	
 
@@ -691,27 +694,29 @@ Function Update-PlayerFiles {
 # Enable TLS 1.2 support
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12;
 
-if (!$menu) {
+if (!$interactive) {
 	# Unattended Mode
-	cls
+	Clear-Host
 	Write-Host "Podcast Manager - Unattended Mode`n"
-	if ($global:config) {
+	if ($global:podcasts) {
 		# Iterate through the config array and call Get-PendingEpisodes to identify available downloads
-		for ($i=0;$i -lt $global:config.count;$i++) {
+		for ($i=0;$i -lt $global:podcasts.count;$i++) {
 			Get-PendingEpisodes -podchoice $i
 		}
 		# Download available episodes
 		Download-PendingEpisodes
+		# Update portable player with new episodes
+		Update-PlayerFiles
 		Write-Host "All operations complete, terminating."
 	} else {
 		Write-Host "Halting as configuration could not be loaded." -foregroundcolor red
 	}
 } else {
 	# Interactive Mode
-	cls
+	Clear-Host
 	Write-host "Podcast Manager`n" -foregroundcolor white
 	# Check config file has loaded, start menu
-	if ($global:config) {
+	if ($global:podcasts) {
 		Show-Menu
 	} else {
 		Write-Host "Halting as configuration could not be loaded." -foregroundcolor red

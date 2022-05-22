@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Settings>
+	<Interactive>Enabled</Interactive>
+	<PodcastList>.\podcasts.csv</PodcastList>
+	<PodcastDelimiter>;</PodcastDelimiter>
+	<InvalidChars>.\invalidchars.csv</InvalidChars>
+	<PodcastDirectory>F:\Podcasts</PodcastDirectory>
+	<PlayerDirectory>G:\Podcasts</PlayerDirectory>
+</Settings>
