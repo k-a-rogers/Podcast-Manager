@@ -9,7 +9,12 @@
 Ipmo BitsTransfer
 
 # Configuration import
-[xml]$settings=Get-Content .\Config.xml
+if (Get-Item -Path .\Config.xml) {
+	[xml]$settings=Get-Content .\Config.xml
+} else {
+	Write-Output "No configuration file found!"
+	Set-ConfigFile
+}
 
 if ($PSScriptRoot -ne "") {
 	[System.Collections.ArrayList]$global:podcasts=Import-CSV -Path $($PSScriptRoot+"$($settings.Settings.PodcastList)") -Delimiter $settings.Settings.PodcastDelimiter;
@@ -116,6 +121,46 @@ Podcast Manager
 		}
 		Start-sleep 1
 	} while (!$quit)
+}
+
+Function Set-ConfigFile {
+	Clear-Host
+	$prompt = Read-Host -Prompt "Is interactive mode required? Y/N"
+	if	($prompt -eq "Y") {
+		$interactive = "Enabled"
+	} else {
+		$interactive = "Disabled"
+	}
+	$podcastlist = ".\podcasts.csv"
+	$delimiter = ";"
+	$invalid = ".\invalidchars.csv"
+	[boolean]$valid = $false
+	while (!$valid) {
+		$prompt = Read-Host -Prompt "Enter full path for top-level folder where podcasts will be stored"
+		if	(Test-Path $prompt) {
+			$podpath = $prompt
+			$valid = $true
+		} else {
+			Write-Output "Invalid path specified, please try again"
+		}
+	}
+	$prompt = Read-Host -Prompt "Enter full path to folder on player where episodes will be copied. Press Enter to skip"
+	if ($prompt -ne "") {
+		$playerpath = $prompt
+	}
+	$config = @"
+	<?xml version="1.0" encoding="UTF-8"?>
+	<Settings>
+		<Interactive>$($interactive)</Interactive>
+		<PodcastList>$($podcastlist)</PodcastList>
+		<PodcastDelimiter>$($delimiter)</PodcastDelimiter>
+		<InvalidChars>$($invalid)</InvalidChars>
+		<PodcastDirectory>$($podpath)</PodcastDirectory>
+		<PlayerDirectory>$($playerpath)</PlayerDirectory>
+	</Settings>
+"@
+	Out-file -FilePath .\Config.xml -Encoding UTF8 -InputObject $config
+
 }
 
 Function Get-PendingEpisodes {
