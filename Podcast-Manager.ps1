@@ -6,7 +6,7 @@
 
 # Module import
 
-Ipmo BitsTransfer
+Import-Module BitsTransfer
 
 # Configuration import
 if (Get-Item -Path .\Config.xml) {
@@ -160,7 +160,6 @@ Function Set-ConfigFile {
 	</Settings>
 "@
 	Out-file -FilePath .\Config.xml -Encoding UTF8 -InputObject $config
-
 }
 
 Function Get-PendingEpisodes {
@@ -175,17 +174,17 @@ Function Get-PendingEpisodes {
 		# If cutoff is populated, use that
 		if ($podcast.cutoff) {
 			[int]$mostrecent=$podcast.cutoff
-		} elseif ((Gci -Path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3").count -gt 0) {
-			[int]$mostrecent=((GCI -Path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name -split " - |:")[0]
+		} elseif ((Get-ChildItem -Path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3").count -gt 0) {
+			[int]$mostrecent=((Get-ChildItem -Path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" | Sort-object -Property Name -Descending | Select-Object -First 1).Name -split " - |:")[0]
 		} else {
 			$mostrecent=$null
 		}
 		# Check available episodes that match the episode filter until one exceeds the cutoff.
 		
-		# OLD CODE $eps=@($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and (((($_.Title -split " |:")[0] -as [int]) -is [int]) -and ([int16]($_.Title -split " |:")[0] -gt $mostrecent))} | Sort-Object -Property Title)
+		# OLD CODE $eps=@($feed.rss.channel.item | Where-Object {($_.Title -match $podcast.TitleFilter) -and (((($_.Title -split " |:")[0] -as [int]) -is [int]) -and ([int16]($_.Title -split " |:")[0] -gt $mostrecent))} | Sort-Object -Property Title)
 		[System.collections.array]$eps=@()
 		for ($i=0; $i -lt $feed.rss.channel.item.count; $i++) {
-			$episode=$feed.rss.channel.item[$i] | ?{Invoke-Expression $podcast.EpFilter} |Select enclosure,@{N="EpisodeNumber";E={[int](Invoke-Expression $podcast.EpNumberTransform)}} | ? {$_.EpisodeNumber -gt $podcast.cutoff}
+			$episode=$feed.rss.channel.item[$i] | Where-Object{Invoke-Expression $podcast.EpFilter} |Select-Object enclosure,@{N="EpisodeNumber";E={[int](Invoke-Expression $podcast.EpNumberTransform)}} | Where-Object {$_.EpisodeNumber -gt $podcast.cutoff}
 			if ($episode) {
 				$eps.Add($episode) | out-Null
 			} else {
@@ -207,14 +206,14 @@ Function Get-PendingEpisodes {
 		Remove-Variable -name mostrecent -Force -erroraction silentlycontinue
 	} else {
 		# Find most recent downloaded episode using episode datestring
-		if ((Gci -path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" ).count -gt 0) {
-			[datetime]$mostrecent=((GCI -path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name).SubString(0,10)
+		if ((Get-ChildItem -path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" ).count -gt 0) {
+			[datetime]$mostrecent=((Get-ChildItem -path "$($podcastdir)\$($Podcast.Directory)" -filter "*.mp3" | Sort-object -Property Name -Descending | Select-Object -First 1).Name).SubString(0,10)
 			$mostrecent=$mostrecent.AddMinutes(1439)
 		} else {
 			$mostrecent=$null
 		}
 		# Find all episodes matching the title filter which have a newer publication date than the most recent episode.
-		$eps=@($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and ([datetime]$($_.Pubdate -replace " EST","") -gt $mostrecent)}| Sort-Object @{Expression={[datetime]$($_.Pubdate -replace " EST","")};Ascending=$true})
+		$eps=@($feed.rss.channel.item | Where-Object {($_.Title -match $podcast.TitleFilter) -and ([datetime]$($_.Pubdate -replace " EST","") -gt $mostrecent)}| Sort-Object @{Expression={[datetime]$($_.Pubdate -replace " EST","")};Ascending=$true})
 
 		if ($eps) {
 			$var = New-Object -Type PSObject @{
@@ -241,7 +240,7 @@ Function Show-LatestEpisodes {
 		$podcast=$global:podcasts[$i];
 		Write-Host "Podcast:`t$($podcast.Name)"
 		[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
-		$ep=($feed.rss.channel.item | ? {($_.Title -match $podcast.TitleFilter) -and ([datetime]$($_.Pubdate -replace " EST","") -gt $mostrecent)}| Sort-Object @{Expression={[datetime]$($_.Pubdate -replace " EST","")};Ascending=$false})[0]
+		$ep=($feed.rss.channel.item | Where-Object {($_.Title -match $podcast.TitleFilter) -and ([datetime]$($_.Pubdate -replace " EST","") -gt $mostrecent)}| Sort-Object @{Expression={[datetime]$($_.Pubdate -replace " EST","")};Ascending=$false})[0]
 		Write-Host "Latest episode:`t$($ep.Title)" -foregroundcolor white
 		if ([datetime]$($ep.Pubdate -replace " EST","") -lt ((Get-Date).AddMonths(-6))) {
 			$color="red"
@@ -259,7 +258,7 @@ Function Download-PendingEpisodes {
 	# Only start the download pr
 	if ($global:pendingepisodes) {
 		foreach ($podcast in $global:podcasts) {
-			foreach ($episode in ($global:pendingepisodes | ? {$_.Name -eq $podcast.Name}).Episodes) {
+			foreach ($episode in ($global:pendingepisodes | Where-Object {$_.Name -eq $podcast.Name}).Episodes) {
 				# Assemble filename from title, adding pubdate where necessary
 				$title=$episode.Title
 				if ($podcast.TitleTransform) {
@@ -316,7 +315,7 @@ Function Download-PendingEpisodes {
 
 			# Optional progress reporting
 			$transfers=Get-BitsTransfer
-			while (($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Transferring"}) -or ($transfers | % {$_.JobState.ToString()} | ? {$_ -eq "Connecting"})) {
+			while (($transfers | Foreach-Object {$_.JobState.ToString()} | Where-Object {$_ -eq "Transferring"}) -or ($transfers | Foreach-Object {$_.JobState.ToString()} | Where-Object {$_ -eq "Connecting"})) {
 				# Progress stuff goes here
 				$percentages=@()
 				foreach ($transfer in $transfers) {
@@ -401,7 +400,7 @@ Function Add-Podcast {
 			$filter=Read-Host("Please enter a regular expression to match for filtering episode titles")
 			if ($filter) {
 				Write-Host "Filtered episode titles are:`n"
-				foreach ($ep in ($eps | ? {$_.Title -match $filter})) {
+				foreach ($ep in ($eps | Where-Object {$_.Title -match $filter})) {
 					Write-Host "Episode title:`t$($ep.Title)`n"
 				}
 				[string]$confirm=Read-Host("Is this filter expression correct? Y/N")
@@ -420,7 +419,7 @@ Function Add-Podcast {
 	# 6) Check if title transform is required, prompt for regex to use and require confirmation before proceeding - DONE
 	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
-	foreach ($ep in $($eps | ? {$_.Title -match $filter})) {
+	foreach ($ep in $($eps | Where-Object {$_.Title -match $filter})) {
 		Write-Host "Episode title:`t$($ep.title)`n"
 	}
 	[string]$titletransform=Read-Host("Based on the displayed episode titles, is any modification of episode titles required? Y/N")
@@ -430,7 +429,7 @@ Function Add-Podcast {
 			$transform=Read-Host("Please enter a regular expression to use for modifying episode titles, using `$title as the variable")
 			if ($transform) {
 				Write-Host "Transformed episode titles are:`n"
-				foreach ($ep in ($eps | ? {$_.Title -match $filter})) {
+				foreach ($ep in ($eps | Where-Object {$_.Title -match $filter})) {
 					$title=$ep.Title
 					$newtitle=Invoke-Expression $transform
 					Write-Host "Episode title:`t$($newtitle)`n"
@@ -452,7 +451,7 @@ Function Add-Podcast {
 	# 7) Check if Mp3transform is required, prompt for regex to use and require confirmation before proceeding. - DONE
 	Clear-Host
 	Write-Host "Add Managed Podcast`n" -foregroundcolor white
-	foreach ($ep in $($eps | ? {$_.Title -match $filter})) {
+	foreach ($ep in $($eps | Where-Object {$_.Title -match $filter})) {
 		Write-Host "Link:`t$($ep.enclosure.url)`n"
 	}
 	[string]$mp3transform=Read-Host("Based on the displayed download links, is any modification of URLs required? Y/N")
@@ -462,7 +461,7 @@ Function Add-Podcast {
 		while (!$validmp3) {
 			$mp3=Read-Host("Please enter a regular expression to use for modifying download links, using `$link as the variable")
 			Write-Host "Transformed download links are:`n"
-			foreach ($ep in ($eps | ? {$_.Title -match $filter})) {
+			foreach ($ep in ($eps | Where-Object {$_.Title -match $filter})) {
 				$link=$ep.enclosure.url
 				$newurl=Invoke-Expression $mp3
 				Write-Host "Modified link:`t$($newurl)`n"
@@ -565,7 +564,7 @@ Function Add-Podcast {
 		Write-Host "Retrieving the most recent episode..."
 		$podcast=$global:podcasts[$($global:podcasts.count -1)]
 		[xml]$feed=Invoke-Webrequest -URI $podcast.RSSFeed
-		$eps=($feed.rss.channel.item | ? {$_.Title -match $podcast.TitleFilter})[0]
+		$eps=($feed.rss.channel.item | Where-Object {$_.Title -match $podcast.TitleFilter})[0]
 		$var = New-Object PSObject -@{
 			Name = $podcast.Name
 			Episodes = $eps
@@ -666,8 +665,8 @@ Function Update-PlayerFiles {
 						Write-host "$($podcast.Name)"
 						# Check for latest episode depending on whether podcast uses episode numbers or dates.
 						if (Invoke-Expression ($podcast.EpNumberInTitle)) {
-							[int]$mostrecent=((GCI -Path $playerdir -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name -split " - ")[0]
-							$files=gci $podcast.Directory -Filter "*.mp3" | ? {[int](($_.Name -split " - ")[0]) -gt $mostrecent}
+							[int]$mostrecent=((Get-ChildItem -Path $playerdir -filter "*.mp3" | Sort-object -Property Name -Descending | Select-Object -First 1).Name -split " - ")[0]
+							$files=Get-ChildItem $podcast.Directory -Filter "*.mp3" | Where-Object {[int](($_.Name -split " - ")[0]) -gt $mostrecent}
 							if ($files.count -gt 0) {
 								Write-host "New episodes of $($podcast.Name) found, starting copy process..."
 								foreach ($file in $files) {
@@ -678,8 +677,8 @@ Function Update-PlayerFiles {
 							}
 							remove-variable -name mostrecent,files -Force -Erroraction SilentlyContinue	
 						} else {
-							[datetime]$mostrecent=((GCI -Path $playerdir -filter "*.mp3" | Sort-object -Property Name -Descending | Select -First 1).Name).SubString(0,10)
-							$files=gci $podcast.Directory -Filter "*.mp3" | ? {[datetime](($_.Name).SubString(0,10)) -gt $mostrecent} 
+							[datetime]$mostrecent=((Get-ChildItem -Path $playerdir -filter "*.mp3" | Sort-object -Property Name -Descending | Select-Object -First 1).Name).SubString(0,10)
+							$files=Get-ChildItem $podcast.Directory -Filter "*.mp3" | Where-Object {[datetime](($_.Name).SubString(0,10)) -gt $mostrecent} 
 							if ($files.count -gt 0) {
 								Write-host "New episodes of $($podcast.Name) found, starting copy process..."
 								foreach ($file in $files) {
