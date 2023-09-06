@@ -132,6 +132,9 @@ Function Set-ConfigFile {
 		$interactive = "Disabled"
 	}
 	$podcastlist = ".\podcasts.csv"
+	if (-not Test-path $podcastlist) {
+		New-Item -Name 'podcasts.csv' -Path
+	}
 	$delimiter = ";"
 	$invalid = ".\invalidchars.csv"
 	[boolean]$valid = $false
@@ -523,7 +526,6 @@ Function Add-Podcast {
 	if ($mp3transform -ne "Y") {
 		$mp3 = $null	
 	}
-	Add-Member -InputObject $var -MemberType NoteProperty -Name Directory -Value $fullpath
 	$var = New-Object -Type PSObject @{
 		Name = $name
 		RSSFeed = $newfeed
