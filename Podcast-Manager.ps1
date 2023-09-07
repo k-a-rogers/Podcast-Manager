@@ -165,10 +165,9 @@ $config = @"
 			if	(Test-Path $prompt) {
 				$configfile = "$prompt\Config.xml"
 				$podcastlist = "$($prompt)\podcasts.csv"
-				if (-not Test-Path $podcastlist) {
-					New-Item -Type File -Path $prompt -Name 'podcasts.csv'
-				}
-				$invalid = "$($prompt)\invalidchars.csv"
+				$headers = "Name;RSSFeed;EpNumber;SeasonNumber;EpNumberTransform;SeasonNumberTransform;Cutoff;Filter;TitleTransform;Mp3Link;Mp3Transform;Directory"
+				Out-File -InputObject $headers -Filepath $podcastlist
+				$invalidcharsfile = "$($prompt)\invalidchars.csv"
 				$invalidchars = @"
 Escaped,Replace
 /,
@@ -185,7 +184,7 @@ Escaped,Replace
 \[,(
 \],)
 "@
-				Export-CSV -InputObject $invalidchars -NoTypeInformation -Path $invalid -Encoding UTF8
+				Export-CSV -InputObject $invalidchars -NoTypeInformation -Path $invalidcharsfile -Encoding UTF8
 				$valid = $true
 			} else {
 				Write-Output "Invalid path specified, please try again"
