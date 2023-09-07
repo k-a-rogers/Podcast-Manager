@@ -1,18 +1,24 @@
 #Podcast-Manager
-
-###############
-# Variables etc
-###############
-
-# Module import
-
+param(
+	[Parameter(Mandatory=$false)]
+	[string]$config
+)
 Import-Module BitsTransfer
 
 # Configuration import
-if (Get-Item -Path .\Config.xml) {
-	[xml]$settings = Get-Content .\Config.xml
+if (-not $config) {
+	if ($PSScriptRoot -ne "") {
+		$config = "$($PSScriptRoot)\Config.xml"
+	} else {
+		$config = ".\Config.xml"
+	}
+}
+
+if (Test-path $config) {
+	[xml]$settings = Get-Content $config
 } else {
-	Write-Output "No configuration file found!"
+	Write-Output "No configuration file found at $($config). Starting configuration process..."
+	Start-sleep 2
 	Set-ConfigFile
 }
 
