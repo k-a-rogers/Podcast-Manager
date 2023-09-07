@@ -1,23 +1,23 @@
 #Podcast-Manager
 param(
 	[Parameter(Mandatory=$false)]
-	[string]$config
+	[string]$configfile
 )
 Import-Module BitsTransfer
 
 # Configuration import
-if (-not $config) {
+if ((-not $configfile) -or (-not Test-Path $configfile)) {
 	if ($PSScriptRoot -ne "") {
-		$config = "$($PSScriptRoot)\Config.xml"
+		$configfile = "$($PSScriptRoot)\Config.xml"
 	} else {
-		$config = ".\Config.xml"
+		$configfile = ".\Config.xml"
 	}
 }
 
-if (Test-path $config) {
-	[xml]$settings = Get-Content $config
+if (Test-path $configfile) {
+	[xml]$settings = Get-Content $configfile
 } else {
-	Write-Output "No configuration file found at $($config). Starting configuration process..."
+	Write-Output "No configuration file found at $($configfile). Starting configuration process..."
 	Start-sleep 2
 	Set-ConfigFile
 }
@@ -51,13 +51,13 @@ function Show-Menu {
 Podcast Manager
 
 1.	Check for available episodes of all podcasts 
-2.	Check for available episodes of a specific podcast
-3.	Show information for most recent available episodes of all podcasts
-4.	Download available episodes of current podcasts
-5.	View managed podcasts
-6.	Add new managed podcast
-7.	Remove managed podcast
-8.	Update player files
+2.	Show information for most recent available episodes of all podcasts
+3.	Download available episodes of current podcasts
+4.	View managed podcasts
+5.	Add new managed podcast
+6.	Remove managed podcast
+7.	Update player files
+8.	Update configuration
 9.	Quit
 
 "@
@@ -76,46 +76,25 @@ Podcast Manager
 				Start-sleep 5
 			}
 			"2" {
-				# Display names of podcast, prompt for numerical selection, then invoke Get-PendingEpisodes.
-				Clear-Host
-				[boolean]$valid = $false
-				while (!$valid) {
-					Write-Host "The following podcasts are managed:`n"
-					for ($i = 0;$i -lt $global:podcasts.count;$i++) {
-						Write-Host "$($i+1): $($global:podcasts[$i].Name)"
-					}
-					Write-Host ""
-					[int]$choice = Read-Host("Please select the desired podcast")
-					$choice--
-					if ($global:podcasts[$choice]) {
-						$valid = $true; 
-						Get-PendingEpisodes -podchoice $choice
-					} else {
-						Write-Host "Invalid selection entered, please try again!" -foregroundcolor red
-						Start-sleep 3
-						Clear-Host
-					}
-				}
-				Start-Sleep 5
-				Remove-Variable -Name valid,choice -Force -ErrorAction SilentlyContinue
-			}
-			"3" {
 				Show-LatestEpisodes;
 			}
-			"4" {
+			"3" {
 				Download-PendingEpisodes;
 			}
-			"5" {
+			"4" {
 				View-Podcasts;
 			}
-			"6" {
+			"5" {
 				Add-Podcast;
 			}
-			"7" {
+			"6" {
 				Remove-Podcast;
 			}
-			"8" {
+			"7" {
 				Update-PlayerFiles;
+			}
+			"8" {
+				Set-ConfigFile;
 			}
 			"9" {
 				Write-Host "Quitting..."
@@ -131,44 +110,115 @@ Podcast Manager
 
 Function Set-ConfigFile {
 	Clear-Host
-	$prompt = Read-Host -Prompt "Is interactive mode required? Y/N"
-	if	($prompt -eq "Y") {
-		$interactive = "Enabled"
-	} else {
-		$interactive = "Disabled"
-	}
-	$podcastlist = ".\podcasts.csv"
-	if (-not Test-path $podcastlist) {
-		New-Item -Name 'podcasts.csv' -Path '.' -Type File
-	}
-	$delimiter = ";"
-	$invalid = ".\invalidchars.csv"
-	[boolean]$valid = $false
-	while (!$valid) {
-		$prompt = Read-Host -Prompt "Enter full path for top-level folder where podcasts will be stored"
-		if	(Test-Path $prompt) {
-			$podpath = $prompt
-			$valid = $true
+	if ($settings) {
+		# Modify existing settings - need to work out how to manage configfile location if not in same directory
+		Write-Output "Existing settings have been found."
+		$prompt = Read-Host -Prompt "Is interactive mode required? Y/N"
+		if	($prompt -eq "Y") {
+			$interactive = "Enabled"
 		} else {
-			Write-Output "Invalid path specified, please try again"
+			$interactive = "Disabled"
 		}
-	}
-	$prompt = Read-Host -Prompt "Enter full path to folder on player where episodes will be copied. Press Enter to skip"
-	if ($prompt -ne "") {
-		$playerpath = $prompt
-	}
-	$config = @"
-	<?xml version = "1.0" encoding = "UTF-8"?>
-	<Settings>
-		<Interactive>$($interactive)</Interactive>
-		<PodcastList>$($podcastlist)</PodcastList>
-		<PodcastDelimiter>$($delimiter)</PodcastDelimiter>
-		<InvalidChars>$($invalid)</InvalidChars>
-		<PodcastDirectory>$($podpath)</PodcastDirectory>
-		<PlayerDirectory>$($playerpath)</PlayerDirectory>
-	</Settings>
+		$podcastlist = ".\podcasts.csv"
+		if (-not Test-path $podcastlist) {
+			New-Item -Name 'podcasts.csv' -Path '.' -Type File
+		}
+		$delimiter = ";"
+		$invalid = ".\invalidchars.csv"
+		[boolean]$valid = $false
+		while (!$valid) {
+			$prompt = Read-Host -Prompt "Enter full path for top-level folder where podcasts will be stored"
+			if	(Test-Path $prompt) {
+				$podpath = $prompt
+				$valid = $true
+			} else {
+				Write-Output "Invalid path specified, please try again"
+			}
+		}
+		$prompt = Read-Host -Prompt "Enter full path to folder on player where episodes will be copied. Press Enter to skip"
+		if ($prompt -ne "") {
+			$playerpath = $prompt
+		}
+$config = @"
+<?xml version = "1.0" encoding = "UTF-8"?>
+<Settings>
+	<Interactive>$($interactive)</Interactive>
+	<PodcastList>$($podcastlist)</PodcastList>
+	<PodcastDelimiter>$($delimiter)</PodcastDelimiter>
+	<InvalidChars>$($invalid)</InvalidChars>
+	<PodcastDirectory>$($podpath)</PodcastDirectory>
+	<PlayerDirectory>$($playerpath)</PlayerDirectory>
+</Settings>
 "@
-	Out-file -FilePath .\Config.xml -Encoding UTF8 -InputObject $config
+		Out-file -FilePath .\Config.xml -Encoding UTF8 -InputObject $config
+	} else {
+		# Initial setup
+		$prompt = Read-Host -Prompt "Is interactive mode required? Y/N"
+		if	($prompt -eq "Y") {
+			$interactive = "Enabled"
+		} else {
+			$interactive = "Disabled"
+		}
+		[boolean]$valid = $false
+		while (!$valid) {
+			$prompt = Read-Host -Prompt "Enter a location to store configuration files, or press Enter to use $($PSScriptRoot)"
+			if	(Test-Path $prompt) {
+				$configfile = "$prompt\Config.xml"
+				$podcastlist = "$($prompt)\podcasts.csv"
+				if (-not Test-Path $podcastlist) {
+					New-Item -Type File -Path $prompt -Name 'podcasts.csv'
+				}
+				$invalid = "$($prompt)\invalidchars.csv"
+				$invalidchars = @"
+Escaped,Replace
+/,
+\\\\,
+\?,
+\|,-
+>,
+<,
+:," -"
+\*,
+\+,
+;,","
+=,
+\[,(
+\],)
+"@
+				Export-CSV -InputObject $invalidchars -NoTypeInformation -Path $invalid -Encoding UTF8
+				$valid = $true
+			} else {
+				Write-Output "Invalid path specified, please try again"
+			}
+		}
+		$delimiter = ";"
+		[boolean]$valid = $false
+		while (!$valid) {
+			$prompt = Read-Host -Prompt "Enter full path for top-level folder where podcasts will be stored"
+			if	(Test-Path $prompt) {
+				$podpath = $prompt
+				$valid = $true
+			} else {
+				Write-Output "Invalid path specified, please try again"
+			}
+		}
+		$prompt = Read-Host -Prompt "Enter full path to folder on player where episodes will be copied. Press Enter to skip"
+		if ($prompt -ne "") {
+			$playerpath = $prompt
+		}
+$config = @"
+<?xml version = "1.0" encoding = "UTF-8"?>
+<Settings>
+	<Interactive>$($interactive)</Interactive>
+	<PodcastList>$($podcastlist)</PodcastList>
+	<PodcastDelimiter>$($delimiter)</PodcastDelimiter>
+	<InvalidChars>$($invalid)</InvalidChars>
+	<PodcastDirectory>$($podpath)</PodcastDirectory>
+	<PlayerDirectory>$($playerpath)</PlayerDirectory>
+</Settings>
+"@
+		Out-file -Inputfile $config -FilePath $configfile -Encoding UTF8
+	}
 }
 
 Function Get-PendingEpisodes {
